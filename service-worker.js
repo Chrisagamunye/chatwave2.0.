@@ -1,9 +1,9 @@
-const CACHE_NAME = "chat-wave-v2";
+const CACHE_NAME = "chatwave-no-wait-v1";
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
-  "./whatsapp-logo.svg",
+  "./chatwave-logo.svg",
   "./icon-192.png",
   "./icon-512.png"
 ];

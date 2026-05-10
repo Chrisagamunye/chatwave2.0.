@@ -1,13 +1,13 @@
 {
-  "name": "Nonso Chat",
-  "short_name": "Nonso Chat",
+  "name": "ChatWave",
+  "short_name": "ChatWave",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#061F17",
   "theme_color": "#25D366",
-  "description": "Nonso Chat peer-to-peer chat app with voice and video calls.",
+  "description": "ChatWave peer-to-peer chat app with voice and video calls.",
   "icons": [
     {
       "src": "icon-192.png",

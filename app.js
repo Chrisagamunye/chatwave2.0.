@@ -12,7 +12,7 @@ const state = {
 };
 
 const COLORS = ["#FF6B9D", "#4ECDC4", "#5B8FF9", "#F39C12", "#8E44AD", "#E74C3C", "#16A085", "#3498DB", "#9B59B6", "#E67E22"];
-const STORAGE_KEY = "nonso_chat_v1";
+const STORAGE_KEY = "chatwave_v1";
 
 function loadSavedData() {
   try {
@@ -76,6 +76,14 @@ function init() {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(id).catch(() => {});
     }
+
+    // Enter the app immediately. Users can add friends and start typing without waiting.
+    document.getElementById("onboard").style.display = "none";
+    document.getElementById("app").classList.add("active");
+    renderContactsList();
+    renderChatPanel();
+    closeMobileChat();
+    reconnectAllContacts();
   });
 
   state.peer.on("connection", handleIncomingDataConn);
@@ -151,7 +159,7 @@ function onboardConnect() {
   renderContactsList();
   renderChatPanel();
   closeMobileChat();
-  toast("Friend added. Tap the name to open chat.");
+  toast("Friend added. Tap the name and start chatting.");
   document.getElementById("friendIdInput").value = "";
   document.getElementById("friendNameInput").value = "";
 }
@@ -172,7 +180,7 @@ function sidebarAddContact() {
   renderContactsList();
   renderChatPanel();
   closeMobileChat();
-  toast("Friend added. Tap the name to open chat.");
+  toast("Friend added. Tap the name and start chatting.");
   document.getElementById("newPeerIdInput").value = "";
   document.getElementById("addBar").classList.add("hidden");
 }
@@ -207,10 +215,39 @@ function deleteContact(peerId) {
 // ============= CONNECTIONS =============
 function initiateConnection(peerId, name) {
   ensureContact(peerId, name);
+  const c = state.contacts.get(peerId);
+  if (c && c.conn && c.conn.open === true) return c.conn;
   updateContactStatus(peerId, "connecting");
 
   const conn = state.peer.connect(peerId, { reliable: true });
   bindDataConn(conn);
+  return conn;
+}
+
+function reconnectAllContacts() {
+  if (!state.peer || !state.myId) return;
+  for (const c of state.contacts.values()) {
+    if (c.id && c.id !== state.myId && (!c.conn || c.conn.open !== true)) {
+      try { initiateConnection(c.id, c.name); } catch (e) {}
+    }
+  }
+}
+
+function flushPendingMessages(peerId) {
+  const c = state.contacts.get(peerId);
+  if (!c || !c.conn || c.conn.open !== true) return;
+  c.messages
+    .filter(m => m.from === "me" && m.status === "pending")
+    .forEach((m) => {
+      try {
+        c.conn.send({ type: "message", text: m.text });
+        updateMsgStatus(peerId, m, "sent");
+        setTimeout(() => updateMsgStatus(peerId, m, "delivered"), 300);
+        setTimeout(() => updateMsgStatus(peerId, m, "read"), 900);
+      } catch (e) {
+        updateMsgStatus(peerId, m, "pending");
+      }
+    });
 }
 
 function handleIncomingDataConn(conn) {
@@ -235,6 +272,7 @@ function bindDataConn(conn) {
     addSystemMessage(peerId, "Connection established. Messages and calls are peer-to-peer.");
     // Send a hello so the other side updates status quickly
     try { conn.send({ type: "hello", from: state.myId }); } catch (e) {}
+    flushPendingMessages(peerId);
   });
 
   conn.on("data", (data) => {
@@ -261,18 +299,25 @@ function sendMessage(text) {
   const peerId = state.activePeerId;
   if (!peerId) return;
   const c = state.contacts.get(peerId);
-  if (!c || !c.conn || c.conn.open !== true) {
-    toast("Not connected to this peer.");
-    return;
-  }
-  const msg = { text, from: "me", time: nowTime(), status: "sent" };
+  if (!c) return;
+
+  // Add the message immediately so the user can chat without waiting.
+  const msg = { text, from: "me", time: nowTime(), status: "pending" };
   addMessage(peerId, msg);
-  try {
-    c.conn.send({ type: "message", text });
-    setTimeout(() => updateMsgStatus(peerId, msg, "delivered"), 300);
-    setTimeout(() => updateMsgStatus(peerId, msg, "read"), 800);
-  } catch (e) {
-    toast("Send failed.");
+
+  // If the peer is already connected, send now. If not, connect in the background and send when ready.
+  if (c.conn && c.conn.open === true) {
+    try {
+      c.conn.send({ type: "message", text });
+      updateMsgStatus(peerId, msg, "sent");
+      setTimeout(() => updateMsgStatus(peerId, msg, "delivered"), 300);
+      setTimeout(() => updateMsgStatus(peerId, msg, "read"), 800);
+    } catch (e) {
+      toast("Message saved. It will send when connected.");
+    }
+  } else {
+    initiateConnection(peerId, c.name);
+    toast("Message ready. Sending when your friend is online.");
   }
 }
 
@@ -414,8 +459,8 @@ function renderChatPanel() {
   if (!c) {
     panel.innerHTML = `
       <div class="empty-chat"><div>
-        <div class="logo"><img src="nonso-chat-logo.svg" alt="Nonso Chat logo" /></div>
-        <p>Pick a contact to start chatting.</p>
+        <div class="logo"><img src="chatwave-logo.svg" alt="ChatWave logo" /></div>
+        <p>Add or pick a friend to start chatting. Messages can be typed immediately and will send once the friend is online.</p>
       </div></div>`;
     return;
   }
@@ -483,7 +528,7 @@ function renderChatHeader() {
   if (!el) return;
   const c = state.contacts.get(state.activePeerId);
   if (!c) return;
-  el.textContent = c.status === "connected" ? "online" : c.status === "connecting" ? "connecting…" : "offline";
+  el.textContent = c.status === "connected" ? "online" : c.status === "connecting" ? "connecting…" : "ready when online";
   el.style.color = c.status === "connected" ? "#00a884" : "#8696a0";
 }
 
@@ -518,6 +563,7 @@ function renderMessages() {
 }
 
 function renderChecks(status) {
+  if (status === "pending") return `<span class="check-icon" title="Sending when connected">•</span>`;
   if (status === "sent") return `<svg class="check-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 4.5L6.5 9.5 4 7l-1 1 3.5 3.5 6-6z"/></svg>`;
   const cls = status === "read" ? "check-icon read" : "check-icon";
   return `<svg class="${cls}" width="16" height="14" viewBox="0 0 18 14" fill="currentColor"><path d="M11.5 1.5L6.5 6.5 4 4 3 5l3.5 3.5 6-6zM15.5 1.5l-5 5L9 5 8 6l2.5 2.5 6-6z"/></svg>`;
@@ -806,7 +852,7 @@ if (installBtn) {
 
 window.addEventListener("appinstalled", () => {
   if (installBtn) installBtn.classList.add("hidden");
-  toast("Nonso Chat installed successfully.");
+  toast("ChatWave installed successfully.");
 });
 
 updateInstallButton();
