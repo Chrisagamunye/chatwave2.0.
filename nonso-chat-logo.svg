@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Nonso Chat logo">
+  <defs>
+    <linearGradient id="g" x1="88" y1="58" x2="424" y2="454" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2AF06D"/>
+      <stop offset="0.55" stop-color="#25D366"/>
+      <stop offset="1" stop-color="#0CA65A"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#021810" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#061F17"/>
+  <circle cx="256" cy="256" r="198" fill="url(#g)" filter="url(#shadow)"/>
+  <path d="M141 373l24-81a132 132 0 1 1 50 51l-74 30z" fill="#fff" opacity="0.98"/>
+  <path d="M179 351l18-61-6-12a104 104 0 1 1 41 40l-12-6-41 39z" fill="url(#g)"/>
+  <path d="M319 302c-13 17-33 26-57 19-37-11-71-43-85-80-9-24-1-45 15-58 5-4 13-5 19-2l20 47c2 5 1 10-3 14l-10 12c10 19 26 35 45 45l13-10c4-4 10-5 15-2l46 21c6 3 8 11 4 17-5 8-12 15-22 20z" fill="#fff"/>
+  <path d="M348 136c28 18 48 47 55 80" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="round" opacity="0.32"/>
+</svg>
