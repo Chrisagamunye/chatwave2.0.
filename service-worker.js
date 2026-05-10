@@ -1,11 +1,12 @@
-const CACHE_NAME = "chatwave-no-wait-v1";
+const CACHE_NAME = "chatwave-storage-notifications-v3";
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./chatwave-logo.svg",
   "./icon-192.png",
-  "./icon-512.png"
+  "./icon-512.png",
+  "./app.js"
 ];
 
 self.addEventListener("install", event => {
@@ -25,5 +26,17 @@ self.addEventListener("activate", event => {
 self.addEventListener("fetch", event => {
   event.respondWith(
     caches.match(event.request).then(cached => cached || fetch(event.request))
+  );
+});
+
+self.addEventListener("notificationclick", event => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then(clientList => {
+      for (const client of clientList) {
+        if ("focus" in client) return client.focus();
+      }
+      if (clients.openWindow) return clients.openWindow("./");
+    })
   );
 });

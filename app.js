@@ -9,14 +9,18 @@ const state = {
   activeCall: null,    // { peerId, type: 'audio'|'video', call, localStream, remoteStream }
   callTimerInterval: null,
   callStartTime: null,
+  ringAudioCtx: null,
+  ringTimer: null,
+  notificationPermissionAsked: false,
 };
 
 const COLORS = ["#FF6B9D", "#4ECDC4", "#5B8FF9", "#F39C12", "#8E44AD", "#E74C3C", "#16A085", "#3498DB", "#9B59B6", "#E67E22"];
-const STORAGE_KEY = "chatwave_v1";
+const STORAGE_KEY = "chatwave_v3";
+const OLD_STORAGE_KEYS = ["chatwave_v2", "chatwave_v1", "whatsclone_v4"];
 
 function loadSavedData() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) || OLD_STORAGE_KEYS.map(k => localStorage.getItem(k)).find(Boolean);
     if (!raw) return { myId: null, contacts: [] };
     const data = JSON.parse(raw);
     return {
@@ -28,13 +32,28 @@ function loadSavedData() {
   }
 }
 
+function normalizeStoredMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .filter((m) => m && typeof m.text === "string" && (m.from === "me" || m.from === "them" || m.from === "system"))
+    .slice(-500)
+    .map((m, index) => ({
+      id: m.id || (Date.now() + index + Math.random()),
+      text: m.text,
+      from: m.from,
+      time: m.time || nowTime(),
+      status: m.status || (m.from === "me" ? "pending" : "read"),
+    }));
+}
+
 function saveStorage() {
   const contacts = [...state.contacts.values()].map((c) => ({
     id: c.id,
     name: c.name,
     color: c.color,
+    messages: normalizeStoredMessages(c.messages),
   }));
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ myId: state.myId, contacts }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ myId: state.myId, contacts, savedAt: Date.now() }));
 }
 
 function restoreContacts(savedContacts) {
@@ -44,7 +63,7 @@ function restoreContacts(savedContacts) {
       id: c.id,
       name: c.name || c.id,
       color: c.color || COLORS[Math.abs(hashCode(c.id)) % COLORS.length],
-      messages: [],
+      messages: normalizeStoredMessages(c.messages),
       conn: null,
       status: "disconnected",
     });
@@ -63,7 +82,13 @@ function restoreContacts(savedContacts) {
 function init() {
   const saved = loadSavedData();
   const initialId = saved.myId || generateNumericId();
-  state.peer = new Peer(initialId, { debug: 1 });
+  state.peer = new Peer(initialId, {
+    debug: 1,
+    config: { iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:global.stun.twilio.com:3478" }
+    ]}
+  });
 
   state.peer.on("open", (id) => {
     state.myId = id;
@@ -113,6 +138,11 @@ function init() {
 }
 
 function bindUI() {
+  ["connectBtn", "addContactBtn", "newPeerConnectBtn", "sendMsgBtn", "audioCallBtn", "videoCallBtn"].forEach((id) => {
+    document.addEventListener("click", (e) => {
+      if (e.target && (e.target.id === id || e.target.closest?.("#" + id))) requestNotificationPermission();
+    }, { passive: true });
+  });
   document.getElementById("copyMyIdBtn").onclick = () => copyId(state.myId, "copyMyIdBtn");
   document.getElementById("myIdPill").onclick = () => copyId(state.myId);
   document.getElementById("connectBtn").onclick = onboardConnect;
@@ -278,6 +308,7 @@ function bindDataConn(conn) {
   conn.on("data", (data) => {
     if (data && data.type === "message") {
       addMessage(peerId, { text: data.text, from: "them", time: nowTime(), status: "read" });
+      notifyIncomingMessage(peerId, data.text);
     } else if (data && data.type === "hello") {
       // Just a handshake
     }
@@ -326,6 +357,9 @@ function addMessage(peerId, msg) {
   if (!c) return;
   msg.id = Date.now() + Math.random();
   c.messages.push(msg);
+  // Keep each chat light so localStorage does not grow too large.
+  if (c.messages.length > 500) c.messages = c.messages.slice(-500);
+  saveStorage();
   if (peerId === state.activePeerId) renderMessages();
   renderContactsList();
 }
@@ -336,6 +370,7 @@ function addSystemMessage(peerId, text) {
 
 function updateMsgStatus(peerId, msg, status) {
   msg.status = status;
+  saveStorage();
   if (peerId === state.activePeerId) renderMessages();
 }
 
@@ -611,10 +646,13 @@ function showIncomingModal(peerId, callType) {
   document.getElementById("incomingName").textContent = c?.name || peerId.slice(0, 8);
   document.getElementById("incomingLabel").textContent = "Incoming " + (callType === "video" ? "video" : "voice") + " call…";
   document.getElementById("incomingModal").classList.add("active");
+  startRingtone();
+  notifyIncomingCall(peerId, callType);
 }
 
 function hideIncomingModal() {
   document.getElementById("incomingModal").classList.remove("active");
+  stopRingtone();
 }
 
 async function acceptCall() {
@@ -714,6 +752,7 @@ function startCallTimer() {
 }
 
 function endCall() {
+  stopRingtone();
   if (state.activeCall) {
     try { state.activeCall.call.close(); } catch (e) {}
     if (state.activeCall.localStream) {
@@ -749,6 +788,95 @@ function toggleCamera() {
   if (!tracks.length) return;
   tracks[0].enabled = !tracks[0].enabled;
   document.getElementById("cameraBtn").classList.toggle("active", !tracks[0].enabled);
+}
+
+
+// ============= NOTIFICATIONS & RINGTONE =============
+function canUseNotifications() {
+  return "Notification" in window && window.isSecureContext;
+}
+
+async function requestNotificationPermission() {
+  if (!canUseNotifications()) return false;
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") return false;
+  if (state.notificationPermissionAsked) return false;
+  state.notificationPermissionAsked = true;
+  try {
+    const permission = await Notification.requestPermission();
+    return permission === "granted";
+  } catch (e) {
+    return false;
+  }
+}
+
+async function showAppNotification(title, body, tag) {
+  if (!canUseNotifications() || Notification.permission !== "granted") return;
+  const options = {
+    body,
+    tag,
+    icon: "./icon-192.png",
+    badge: "./icon-192.png",
+    vibrate: [180, 90, 180],
+  };
+  try {
+    const reg = await navigator.serviceWorker?.ready;
+    if (reg?.showNotification) {
+      await reg.showNotification(title, options);
+      return;
+    }
+  } catch (e) {}
+  try { new Notification(title, options); } catch (e) {}
+}
+
+function notifyIncomingMessage(peerId, text) {
+  const c = state.contacts.get(peerId);
+  const isCurrentOpen = document.visibilityState === "visible" && state.activePeerId === peerId;
+  if (isCurrentOpen) return;
+  showAppNotification(c?.name || "New message", text || "You have a new message", "chat-" + peerId);
+}
+
+function notifyIncomingCall(peerId, callType) {
+  const c = state.contacts.get(peerId);
+  const label = callType === "video" ? "Incoming video call" : "Incoming voice call";
+  showAppNotification(c?.name || "Incoming call", label, "call-" + peerId);
+}
+
+function startRingtone() {
+  stopRingtone();
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    state.ringAudioCtx = ctx;
+    const playTone = () => {
+      if (!state.ringAudioCtx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.55);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.6);
+    };
+    playTone();
+    state.ringTimer = setInterval(playTone, 1200);
+  } catch (e) {}
+}
+
+function stopRingtone() {
+  if (state.ringTimer) {
+    clearInterval(state.ringTimer);
+    state.ringTimer = null;
+  }
+  if (state.ringAudioCtx) {
+    try { state.ringAudioCtx.close(); } catch (e) {}
+    state.ringAudioCtx = null;
+  }
 }
 
 // ============= UTILS =============
